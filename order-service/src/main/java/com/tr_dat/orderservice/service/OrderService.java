@@ -1,5 +1,7 @@
 package com.tr_dat.orderservice.service;
 
+import brave.Span;
+import brave.Tracer;
 import com.tr_dat.orderservice.dto.InventoryResponse;
 import com.tr_dat.orderservice.dto.OrderLineItemsDto;
 import com.tr_dat.orderservice.dto.OrderRequest;
@@ -23,6 +25,7 @@ public class OrderService {
 
   private final OrderRepository orderRepository;
   private final WebClient.Builder webClientBuilder;
+  private final Tracer tracer;
 
   public String placeOrder(OrderRequest orderRequest) {
     Order order = new Order();
@@ -39,22 +42,31 @@ public class OrderService {
       .map(OrderLineItems::getSkuCode)
       .toList();
 
-    InventoryResponse[] inventoryResponseArray = webClientBuilder.build().get()
-      .uri("http://inventory-service/api/inventory",
-        uriBuilder -> uriBuilder.queryParam("skuCode", skuCodes).build())
+    Span inventoryServiceLookup = tracer.nextSpan().name("InventoryServiceLookup");
+
+    try (Tracer.SpanInScope spanInScope = tracer.withSpanInScope(inventoryServiceLookup.start())) {
+
+      inventoryServiceLookup.tag("call", "inventory-service");
+
+      InventoryResponse[] inventoryResponseArray = webClientBuilder.build().get()
+        .uri("http://inventory-service/api/inventory",
+          uriBuilder -> uriBuilder.queryParam("skuCode", skuCodes).build())
         .retrieve()
-          .bodyToMono(InventoryResponse[].class)
-            .block();
+        .bodyToMono(InventoryResponse[].class)
+        .block();
 
-    assert inventoryResponseArray != null;
-    Boolean allProductsInStock = Arrays.stream(inventoryResponseArray).
-      allMatch(InventoryResponse::getInStock);
+      assert inventoryResponseArray != null;
+      Boolean allProductsInStock = Arrays.stream(inventoryResponseArray).
+        allMatch(InventoryResponse::getInStock);
 
-    if (Boolean.TRUE.equals(allProductsInStock)) {
-      orderRepository.save(order);
-      return "Order Placed Successfully";
-    } else {
-      throw new IllegalArgumentException("Product is not in stock. Please try again later.");
+      if (Boolean.TRUE.equals(allProductsInStock)) {
+        orderRepository.save(order);
+        return "Order Placed Successfully";
+      } else {
+        throw new IllegalArgumentException("Product is not in stock. Please try again later.");
+      }
+    } finally {
+      inventoryServiceLookup.flush();
     }
   }
 
