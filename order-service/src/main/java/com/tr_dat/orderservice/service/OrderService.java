@@ -5,10 +5,12 @@ import brave.Tracer;
 import com.tr_dat.orderservice.dto.InventoryResponse;
 import com.tr_dat.orderservice.dto.OrderLineItemsDto;
 import com.tr_dat.orderservice.dto.OrderRequest;
+import com.tr_dat.orderservice.event.OrderPlacedEvent;
 import com.tr_dat.orderservice.model.Order;
 import com.tr_dat.orderservice.model.OrderLineItems;
 import com.tr_dat.orderservice.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -26,6 +28,7 @@ public class OrderService {
   private final OrderRepository orderRepository;
   private final WebClient.Builder webClientBuilder;
   private final Tracer tracer;
+  private final KafkaTemplate<String, OrderPlacedEvent> kafkaTemplate;
 
   public String placeOrder(OrderRequest orderRequest) {
     Order order = new Order();
@@ -61,6 +64,7 @@ public class OrderService {
 
       if (Boolean.TRUE.equals(allProductsInStock)) {
         orderRepository.save(order);
+        kafkaTemplate.send("notificationTopic", new OrderPlacedEvent(order.getOrderNumber()));
         return "Order Placed Successfully";
       } else {
         throw new IllegalArgumentException("Product is not in stock. Please try again later.");
